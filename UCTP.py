@@ -2,6 +2,7 @@ import random
 import csv
 import os
 import time
+import math
 
 def load_ctt_file(filename):
     with open(filename, 'r') as file:
@@ -95,7 +96,7 @@ def check_hard_constraints(data, schedule, cid, day, period, room):
         return False
     return True
 
-def initial_solution(data):
+#def initial_solution(data):
     schedule = {}
     available_periods = []
     for day in range(data["days"]):
@@ -169,10 +170,53 @@ def random_solution(data):
                 day, period, room = slot
                 schedule[cid].append((day, period, room, lecture_num))
             else:
-                print("Nie przypisano: cid = " + str(cid) + ', lecture_num = ' + str(lecture_num))
-    return schedule
+                print(f"Nie przypisano: cid = {cid}, lecture_num = {lecture_num}")
+    hard_penalty, soft_penalty, total_penalty = penalty(schedule, data)
+    return schedule, hard_penalty, soft_penalty, total_penalty
 
-def soft_penalty(schedule, data):
+def penalty(schedule, data):
+    hard_penalty = 0
+    #H2
+    rooms_used = {}
+    for cid in schedule:
+        for day, period, room, a in schedule[cid]:
+            slot = (day, period, room)
+            if slot not in rooms_used:
+                rooms_used[slot] = 0
+            rooms_used[slot] += 1
+    for count in rooms_used.values():
+        if count > 1:
+            hard_penalty += 100 * (count - 1)
+    #H3
+    teacher_schedule = {}
+    for cid in schedule:
+        teacher = data["courses"][cid]["teacher"]
+        for day, period, b, c in schedule[cid]:
+            slot = (day, period, teacher)
+            if slot not in teacher_schedule:
+                teacher_schedule[slot] = 0
+            teacher_schedule[slot] += 1
+    for count in teacher_schedule.values():
+        if count > 1:
+            hard_penalty += 100 * (count - 1)
+    curriculum_slots = {}
+    for curriculum in data["curricula"]:
+        curriculum_id = curriculum["id"]
+        courses = curriculum["courses"]
+        for cid in courses:
+            for day, period, d, e in schedule[cid]:
+                slot = curriculum_id, day, period
+                if slot not in curriculum_slots:
+                    curriculum_slots[slot] = 0
+                curriculum_slots[slot] += 1
+    for count in curriculum_slots.values():
+        if count > 1:
+            hard_penalty += 100 * (count - 1)
+    #H4:
+    for cid in schedule:
+        for day, period, f, g in schedule[cid]:
+            if (cid, day, period) in data["constraints"]:
+                hard_penalty += 100
     soft_penalty = 0
     # S1
     for cid in schedule:
@@ -216,52 +260,8 @@ def soft_penalty(schedule, data):
             for i in range(len(periods) - 1):
                 if periods[i+1] != periods[i] + 1:
                     soft_penalty += 2
-    return soft_penalty
-
-def hard_penalty(schedule, data):
-    hard_penalty = 0
-    #H2
-    rooms_used = {}
-    for cid in schedule:
-        for day, period, room, a in schedule[cid]:
-            slot = (day, period, room)
-            if slot not in rooms_used:
-                rooms_used[slot] = 0
-            rooms_used[slot] += 1
-    for count in rooms_used.values():
-        if count > 1:
-            hard_penalty += 100 * (count - 1)
-    #H3
-    teacher_schedule = {}
-    for cid in schedule:
-        teacher = data["courses"][cid]["teacher"]
-        for day, period, b, c in schedule[cid]:
-            slot = (day, period, teacher)
-            if slot not in teacher_schedule:
-                teacher_schedule[slot] = 0
-            teacher_schedule[slot] += 1
-    for count in teacher_schedule.values():
-        if count > 1:
-            hard_penalty += 100 * (count - 1)
-    curriculum_slots = {}
-    for curriculum in data["curricula"]:
-        curriculum_id = curriculum["id"]
-        courses = curriculum["courses"]
-        for cid in courses:
-            for day, period, d, e in schedule[cid]:
-                slot = curriculum_id, day, period
-                if slot not in curriculum_slots:
-                    curriculum_slots[slot] = 0
-                curriculum_slots[slot] += 1
-    for count in curriculum_slots.values():
-        if count > 1:
-            hard_penalty += 100 * (count - 1)
-    #H4:
-    for cid in schedule:
-        for day, period, f, g in schedule[cid]:
-            if (cid, day, period) in data["constraints"]:
-                hard_penalty += 100
-    return hard_penalty
+    total_penalty = hard_penalty + soft_penalty
+    return hard_penalty, soft_penalty, total_penalty
 
 def save_to_csv(filename, data):
     with open(filename, mode='a', newline='', encoding='utf-8') as file:
@@ -410,27 +410,105 @@ def save_html_timetable(directory, filename, html_content):
     with open(filepath, 'w', encoding='utf-8') as f:
         f.write(html_content)
 
-if __name__ == "__main__":
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    data = load_ctt_file(os.path.join(current_dir, "instancje", "toy.ctt.txt"))
+def save_to_csv(filename, data, append=True):
+    if append:
+        mode = 'a'
+    else:
+        mode = 'w'
+    with open(filename, mode=mode, newline='', encoding='utf-8') as file:
+        writer = csv.writer(file, delimiter=';')
+        writer.writerows(data)
+
+def simulated_annealing(data, gauss, initial_temp=5000, cooling_rate=0.99, max_iterations=1000):
+    current_schedule, current_hard, current_soft, current_penalty = random_solution(data)
+    best_schedule = current_schedule.copy()
+    best_hard, best_soft, best_penalty = current_hard, current_soft, current_penalty
+    temp = initial_temp
+    write_sa = []
+    write_sa.append(['Iteracja', 'Temperatura', 'Hard penalty', 'Soft penalty', 'Total penalty'])
+    write_sa.append([0, temp, current_hard, current_soft, current_penalty])
+    for i in range(max_iterations):
+        neighbor_schedule = current_schedule.copy()
+        rand_cid = random.choice(list(neighbor_schedule.keys()))
+        lectures = neighbor_schedule[rand_cid]
+        rand_lecture = random.randint(0, len(lectures)-1)
+        day, period, room, lecture_num = lectures[rand_lecture]
+        if gauss:
+            new_day = int(random.gauss(day, 1)) % data["days"]
+            new_period = int(random.gauss(period, 1)) % data["periods_per_day"]
+        else:
+            new_day = random.randint(0, data["days"]-1)
+            new_period = random.randint(0, data["periods_per_day"]-1)
+        new_room = random.choice(list(data["rooms"].keys()))
+        if check_hard_constraints(data, neighbor_schedule, rand_cid, new_day, new_period, new_room):
+            neighbor_schedule[rand_cid][rand_lecture] = (new_day, new_period, new_room, lecture_num)
+            neighbor_hard, neighbor_soft, neighbor_penalty = penalty(neighbor_schedule, data)
+            diffrence = neighbor_penalty - current_penalty
+            if diffrence < 0 or (temp > 0 and random.random() < math.exp(-diffrence / temp)):
+                current_schedule = neighbor_schedule.copy()
+                current_hard, current_soft, current_penalty = neighbor_hard, neighbor_soft, neighbor_penalty
+                if current_penalty < best_penalty:
+                    best_schedule = current_schedule.copy()
+                    best_hard, best_soft, best_penalty = current_hard, current_soft, current_penalty
+        write_sa.append([int(i+1), temp, current_hard, current_soft, current_penalty])
+        temp *= cooling_rate
+    save_to_csv(os.path.join(current_dir, "wyniki", f"{os.path.splitext(instance)[0]}", "sa_process.csv"), write_sa, append=False)
+    return best_schedule, best_hard, best_soft, best_penalty
+
+def best_solution(pop):
+    best = min(pop, key=lambda p: p[3])
+    return best
+
+def worst_solution(pop):
+    worst = max(pop, key=lambda p: p[3])
+    return worst
     
-    start_time = time.time()
-    initial_schedule = initial_solution(data)
-    soft_initial_penalty = soft_penalty(initial_schedule, data)
-    hard_initial_penalty = hard_penalty(initial_schedule, data)
-    print("Kara dla rozwiazania inicjalizujacego: " + 'soft = ' + str(soft_initial_penalty) + ', hard = ' + str(hard_initial_penalty) + ', razem = ' + str(hard_initial_penalty + soft_initial_penalty))
-    end_time = time.time()
-    #print("Czas trwania wyznaczania rozwiazania inicjacyjnego: " + str(end_time-start_time))
+def avg_solution(pop):
+    avg = sum(p[3] for p in pop) / len(pop)
+    return avg
 
-    start_time = time.time()
-    random_schedule = random_solution(data)
-    soft_random_penalty = soft_penalty(random_schedule, data)
-    hard_random_penalty = hard_penalty(random_schedule, data)
-    print("Kara dla rozwiazania losowego: " + 'soft = ' + str(soft_random_penalty) + ', hard = ' + str(hard_random_penalty) + ', razem = ' + str(soft_random_penalty + hard_random_penalty))
-    end_time = time.time()
-    #print("Czas trwania wyznaczania rozwiazania losowego: " + str(end_time-start_time))
+def std_solution(pop):
+    avg = avg_solution(pop)
+    std = (sum((p[3] - avg)**2 for p in pop)/ (len(pop) - 1))**0.5
+    return std
 
-    html = generate_html_timetable(initial_schedule, data)
-    save_html_timetable(current_dir, "initial_timetable.html", html)
-    html = generate_html_timetable(random_schedule, data)
-    save_html_timetable(current_dir, "random_timetable.html", html)
+if __name__ == "__main__":
+    start_time = time.time()
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    instances = ['toy.ctt.txt','comp01.ctt.txt','comp02.ctt.txt','comp03.ctt.txt','comp04.ctt.txt','comp05.ctt.txt','comp06.ctt.txt','comp07.ctt.txt','comp08.ctt.txt','comp09.ctt.txt','comp10.ctt.txt',
+                'comp11.ctt.txt','comp12.ctt.txt','comp13.ctt.txt','comp14.ctt.txt','comp15.ctt.txt','comp16.ctt.txt','comp17.ctt.txt','comp18.ctt.txt','comp19.ctt.txt','comp20.ctt.txt','comp21.ctt.txt']
+    #instances = ['comp01.ctt.txt']
+    write = []
+    write.append(['Instancja', 'Algorytm losowy', None, None, None, 'Simulated Annealing', None, None, None, 'Simulated Annealing Gauss', None, None, None,
+                   'Algorytm Genetyczny', None, None, None])
+    write.append([None, 'best', 'avg', 'worst', 'std', 'best', 'avg', 'worst', 'std', 'best', 'avg', 'worst', 'std',
+                   'best', 'avg', 'worst', 'std'])
+    for instance in instances:
+        sa_pop = []
+        sa_gauss_pop = []
+        random_pop = []
+        print(f"Instancja {os.path.splitext(instance)[0]}")
+        data = load_ctt_file(os.path.join(current_dir, "instancje", instance))
+        print("Random")
+        for i in range(10):
+            random_pop.append(random_solution(data))
+        best_random = best_solution(random_pop)
+        print("Sa")
+        for i in range(10):
+            sa_pop.append(simulated_annealing(data, False))
+        best_sa = best_solution(sa_pop)
+        print("Sa Gauss")
+        for i in range(10):
+            sa_gauss_pop.append(simulated_annealing(data, True))
+        best_sa_gauss = best_solution(sa_pop)
+        html = generate_html_timetable(best_random[0], data)
+        save_html_timetable(os.path.join(current_dir, "wyniki", f"{os.path.splitext(instance)[0]}"), "random_timetable.html", html)
+        html = generate_html_timetable(best_sa[0], data)
+        save_html_timetable(os.path.join(current_dir,"wyniki", f"{os.path.splitext(instance)[0]}"), "sa_timetable.html", html)
+        write.append([os.path.splitext(instance)[0], best_random[3], avg_solution(random_pop), worst_solution(random_pop)[3], std_solution(random_pop), 
+                      best_sa[3], avg_solution(sa_pop), worst_solution(sa_pop)[3], std_solution(sa_pop), 
+                      best_sa_gauss[3], avg_solution(sa_gauss_pop), worst_solution(sa_gauss_pop)[3], std_solution(sa_gauss_pop), best_sa[1]])
+    save_to_csv(os.path.join(current_dir, "solution.csv"), write)
+    end_time = time.time()
+    print(f"Czas wykonania: {end_time-start_time} sekund")
+    
