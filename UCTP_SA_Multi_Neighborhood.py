@@ -240,7 +240,7 @@ def penalty(schedule, data):
     for cid in schedule:
         days_used = []
         for day, period, room, i in schedule[cid]:
-            if room not in days_used:
+            if day not in days_used:
                 days_used.append(day)
         min_days = data["courses"][cid]["min_days"]
         if len(days_used) < min_days:
@@ -421,7 +421,7 @@ def save_to_csv(filename, data, append=True):
         writer = csv.writer(file, delimiter=';')
         writer.writerows(data)
 
-def get_available_periods(schedule, data):
+def get_available_periods(schedule, data, cid):
     possible_periods = []
     available_periods = []
     occupied_slots = set()
@@ -429,15 +429,20 @@ def get_available_periods(schedule, data):
         for period in range(data["periods_per_day"]):
             for room in data["rooms"]:
                 possible_periods.append((day, period, room))
-    for cid in schedule:
-        for day, period, room, _ in schedule[cid]:
+    for other_cid in schedule:
+        for day, period, room, _ in schedule[other_cid]:
             occupied_slots.add((day, period, room))
+    for day, period, f, g in schedule[cid]:
+            if (cid, day, period) in data["constraints"]:
+                for room in data["rooms"]:
+                    occupied_slots.add((day, period, room))
     for slot in possible_periods:
         if slot not in occupied_slots:
             available_periods.append(slot)
     return available_periods
 
 def simulated_annealing(data, gauss, initial_temp=1000, cooling_rate=0.99, max_iterations=1000):
+    bingo = 0
     current_schedule, current_hard, current_soft, current_penalty = random_solution(data)
     best_schedule = current_schedule.copy()
     best_hard, best_soft, best_penalty = current_hard, current_soft, current_penalty
@@ -452,7 +457,7 @@ def simulated_annealing(data, gauss, initial_temp=1000, cooling_rate=0.99, max_i
         lectures = neighbor_schedule[rand_cid]
         rand_lecture = random.randint(0, len(lectures)-1)
         day, period, room, lecture_num = lectures[rand_lecture]
-        available_periods = get_available_periods(neighbor_schedule, data)
+        available_periods = get_available_periods(neighbor_schedule, data, rand_cid)
         for j in range(3):
             if gauss:
                 new_day = int(random.gauss(day, 1))
@@ -475,6 +480,7 @@ def simulated_annealing(data, gauss, initial_temp=1000, cooling_rate=0.99, max_i
                 candidate_solutions.append([neighbor_schedule, *penalty(neighbor_schedule, data)])
                 neighbor_schedule = current_schedule.copy()
         if candidate_solutions:
+            bingo += 1
             neighbor_schedule, neighbor_hard, neighbor_soft, neighbor_penalty = best_solution(candidate_solutions)
             diffrence = neighbor_penalty - current_penalty
             if diffrence < 0 or (temp > 0 and random.random() < math.exp(-diffrence / temp)):
@@ -485,6 +491,7 @@ def simulated_annealing(data, gauss, initial_temp=1000, cooling_rate=0.99, max_i
                     best_hard, best_soft, best_penalty = current_hard, current_soft, current_penalty
         #write_sa.append([int(i+1), temp, current_hard, current_soft, current_penalty])
         temp *= cooling_rate
+    print(bingo)
     #save_to_csv(os.path.join(current_dir, "wyniki", f"{os.path.splitext(instance)[0]}", "sa_process.csv"), write_sa, append=True)
     return best_schedule, best_hard, best_soft, best_penalty
 
@@ -508,9 +515,9 @@ def std_solution(pop):
 if __name__ == "__main__":
     start_time = time.time()
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    #instances = ['toy.ctt.txt','comp01.ctt.txt','comp02.ctt.txt','comp03.ctt.txt','comp04.ctt.txt','comp05.ctt.txt','comp06.ctt.txt','comp07.ctt.txt','comp08.ctt.txt','comp09.ctt.txt','comp10.ctt.txt',
-    #            'comp11.ctt.txt','comp12.ctt.txt','comp13.ctt.txt','comp14.ctt.txt','comp15.ctt.txt','comp16.ctt.txt','comp17.ctt.txt','comp18.ctt.txt','comp19.ctt.txt','comp20.ctt.txt','comp21.ctt.txt']
-    instances = ['comp20.ctt.txt']
+    instances = ['toy.ctt.txt','comp01.ctt.txt','comp02.ctt.txt','comp03.ctt.txt','comp04.ctt.txt','comp05.ctt.txt','comp06.ctt.txt','comp07.ctt.txt','comp08.ctt.txt','comp09.ctt.txt','comp10.ctt.txt',
+                'comp11.ctt.txt','comp12.ctt.txt','comp13.ctt.txt','comp14.ctt.txt','comp15.ctt.txt','comp16.ctt.txt','comp17.ctt.txt','comp18.ctt.txt','comp19.ctt.txt','comp20.ctt.txt','comp21.ctt.txt']
+    #instances = ['comp20.ctt.txt']
     write = []
     write.append(['Instancja', 'Algorytm losowy', None, None, None, 'Simulated Annealing', None, None, None, 'Simulated Annealing Gauss', None, None, None,
                    'Algorytm Genetyczny', None, None, None])
@@ -533,7 +540,7 @@ if __name__ == "__main__":
         print("Sa Gauss")
         for i in range(10):
             sa_gauss_pop.append(simulated_annealing(data, True))
-        best_sa_gauss = best_solution(sa_pop)
+        best_sa_gauss = best_solution(sa_gauss_pop)
         html = generate_html_timetable(best_random[0], data)
         save_html_timetable(os.path.join(current_dir, "wyniki", f"{os.path.splitext(instance)[0]}"), "random_timetable.html", html)
         html = generate_html_timetable(best_sa[0], data)
