@@ -238,7 +238,7 @@ def penalty(schedule, data):
     for cid in schedule:
         days_used = []
         for day, period, room, i in schedule[cid]:
-            if room not in days_used:
+            if day not in days_used:
                 days_used.append(day)
         min_days = data["courses"][cid]["min_days"]
         if len(days_used) < min_days:
@@ -419,14 +419,14 @@ def save_to_csv(filename, data, append=True):
         writer = csv.writer(file, delimiter=';')
         writer.writerows(data)
 
-def simulated_annealing(data, gauss, initial_temp=5000, cooling_rate=0.99, max_iterations=1000):
+def simulated_annealing(data, gauss, initial_temp=1000, cooling_rate=0.99, max_iterations=1000):
     current_schedule, current_hard, current_soft, current_penalty = random_solution(data)
     best_schedule = current_schedule.copy()
     best_hard, best_soft, best_penalty = current_hard, current_soft, current_penalty
     temp = initial_temp
-    write_sa = []
-    write_sa.append(['Iteracja', 'Temperatura', 'Hard penalty', 'Soft penalty', 'Total penalty'])
-    write_sa.append([0, temp, current_hard, current_soft, current_penalty])
+    #write_sa = []
+    #write_sa.append(['Iteracja', 'Temperatura', 'Hard penalty', 'Soft penalty', 'Total penalty'])
+    #write_sa.append([0, temp, current_hard, current_soft, current_penalty])
     for i in range(max_iterations):
         neighbor_schedule = current_schedule.copy()
         rand_cid = random.choice(list(neighbor_schedule.keys()))
@@ -450,9 +450,9 @@ def simulated_annealing(data, gauss, initial_temp=5000, cooling_rate=0.99, max_i
                 if current_penalty < best_penalty:
                     best_schedule = current_schedule.copy()
                     best_hard, best_soft, best_penalty = current_hard, current_soft, current_penalty
-        write_sa.append([int(i+1), temp, current_hard, current_soft, current_penalty])
+        #write_sa.append([int(i+1), temp, current_hard, current_soft, current_penalty])
         temp *= cooling_rate
-    save_to_csv(os.path.join(current_dir, "wyniki", f"{os.path.splitext(instance)[0]}", "sa_process.csv"), write_sa, append=False)
+    #save_to_csv(os.path.join(current_dir, "wyniki", f"{os.path.splitext(instance)[0]}", "sa_process.csv"), write_sa, append=False)
     return best_schedule, best_hard, best_soft, best_penalty
 
 def best_solution(pop):
@@ -500,7 +500,7 @@ if __name__ == "__main__":
         print("Sa Gauss")
         for i in range(10):
             sa_gauss_pop.append(simulated_annealing(data, True))
-        best_sa_gauss = best_solution(sa_pop)
+        best_sa_gauss = best_solution(sa_gauss_pop)
         html = generate_html_timetable(best_random[0], data)
         save_html_timetable(os.path.join(current_dir, "wyniki", f"{os.path.splitext(instance)[0]}"), "random_timetable.html", html)
         html = generate_html_timetable(best_sa[0], data)
