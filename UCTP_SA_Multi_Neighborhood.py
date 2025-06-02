@@ -428,7 +428,7 @@ def save_to_csv(filename, data, append=True):
         writer = csv.writer(file, delimiter=';')
         writer.writerows(data)
 
-def simulated_annealing(data, gauss, initial_temp=1000, cooling_rate=0.9975, max_iterations=1000):
+def simulated_annealing(data, gauss, initial_temp=10000, cooling_rate=0.9975, max_iterations=5000):
     current_schedule, current_hard, current_soft, current_penalty = random_solution(data)
     best_schedule = deepcopy(current_schedule)
     best_hard, best_soft, best_penalty = current_hard, current_soft, current_penalty
@@ -437,19 +437,12 @@ def simulated_annealing(data, gauss, initial_temp=1000, cooling_rate=0.9975, max
     write_sa.append(['Iteracja', 'Temperatura', 'Hard penalty', 'Soft penalty', 'Total penalty'])
     write_sa.append([0, temp, current_hard, current_soft, current_penalty])
     for i in range(max_iterations):
-        #print(f"Interacja nr: {i+1}")
+        print(f"Interacja nr: {i+1}")
         neighbor_schedule = deepcopy(current_schedule)
         for cid in current_schedule.keys():
             for _, _, _, lecture in current_schedule[cid]:
                 candidate_solutions = []
-                #check = True
                 day, period, room, lecture_num = current_schedule[cid][lecture - 1]
-                available_slots = []
-                for day in range(data["days"]):
-                    for period in range(data["periods_per_day"]):
-                        for room in data["rooms"]:
-                            if check_hard_constraints(data, neighbor_schedule, cid, day, period, room):
-                                available_slots.append((day, period, room))
                 rand_cid = random.choice(list(current_schedule.keys()))
                 lectures = current_schedule[rand_cid]
                 rand_lecture = random.randint(0, len(lectures)-1)
@@ -458,20 +451,16 @@ def simulated_annealing(data, gauss, initial_temp=1000, cooling_rate=0.9975, max
                     new_period = int(random.gauss(period, 1))
                     new_day = max(0, min(new_day, data["days"] - 1))
                     new_period = max(0, min(new_period, data["periods_per_day"] - 1))
-                    new_room = random.choice(list(data["rooms"].keys()))
                 else:
-                    if available_slots:
-                        new_day, new_period, new_room = random.choice(available_slots)
-                    else:
-                        continue
-                neighbor_schedule[cid][lecture - 1] = (new_day, new_period, new_room, lecture_num)
+                    new_day = random.randint(0, data["days"]-1)
+                    new_period = random.randint(0, data["periods_per_day"]-1)
+                new_room = random.choice(list(data["rooms"].keys()))
+                neighbor_schedule[cid][lecture - 1] = (new_day, new_period, room, lecture_num)
                 candidate_solutions.append([neighbor_schedule, *penalty(neighbor_schedule, data)])
                 neighbor_schedule = deepcopy(current_schedule)
-                '''
                 neighbor_schedule[cid][lecture - 1] = (day, period, new_room, lecture_num)
                 candidate_solutions.append([neighbor_schedule, *penalty(neighbor_schedule, data)])
                 neighbor_schedule = deepcopy(current_schedule)
-                '''
                 swap_1_day, swap_1_period, swap_1_room, swap_1_lecture = neighbor_schedule[cid][lecture - 1]
                 swap_2_day, swap_2_period, swap_2_room, swap_2_lecture = neighbor_schedule[rand_cid][rand_lecture]
                 '''
@@ -488,7 +477,7 @@ def simulated_annealing(data, gauss, initial_temp=1000, cooling_rate=0.9975, max
                 candidate_solutions.append([neighbor_schedule, *penalty(neighbor_schedule, data)])
                 neighbor_schedule = deepcopy(current_schedule)
                 if candidate_solutions:
-                    neighbor_schedule, neighbor_hard, neighbor_soft, neighbor_penalty = best_solution(candidate_solutions)
+                    neighbor_schedule, neighbor_hard, neighbor_soft, neighbor_penalty = random.choice(candidate_solutions)
                     diffrence = neighbor_penalty - current_penalty
                     if diffrence < 0 or (temp > 0 and random.random() < math.exp(-diffrence / temp)):
                         current_schedule = deepcopy(neighbor_schedule)
@@ -523,7 +512,7 @@ if __name__ == "__main__":
     current_dir = os.path.dirname(os.path.abspath(__file__))
     #instances = ['toy.ctt.txt','comp01.ctt.txt','comp02.ctt.txt','comp03.ctt.txt','comp04.ctt.txt','comp05.ctt.txt','comp06.ctt.txt','comp07.ctt.txt','comp08.ctt.txt','comp09.ctt.txt','comp10.ctt.txt',
     #           'comp11.ctt.txt','comp12.ctt.txt','comp13.ctt.txt','comp14.ctt.txt','comp15.ctt.txt','comp16.ctt.txt','comp17.ctt.txt','comp18.ctt.txt','comp19.ctt.txt','comp20.ctt.txt','comp21.ctt.txt']
-    instances = ['toy.ctt.txt']
+    instances = ['comp01.ctt.txt']
     write = []
     write.append(['Instancja', 'Algorytm losowy', None, None, None, 'Simulated Annealing', None, None, None, 'Simulated Annealing Gauss', None, None, None,
                    'Algorytm Genetyczny', None, None, None])
