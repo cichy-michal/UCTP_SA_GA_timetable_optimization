@@ -3,6 +3,7 @@ import csv
 import os
 import time
 import math
+from copy import deepcopy
 
 def load_ctt_file(filename):
     with open(filename, 'r') as file:
@@ -96,49 +97,6 @@ def check_hard_constraints(data, schedule, cid, day, period, room):
         return False
     return True
 
-#def initial_solution(data):
-    schedule = {}
-    available_periods = []
-    for day in range(data["days"]):
-        for period in range(data["periods_per_day"]):
-            for room in data["rooms"]:
-                available_periods.append((day, period, room))
-    courses = []
-    for cid, course in data["courses"].items():
-        ap = data["days"] * data["periods_per_day"] * len(data["rooms"])
-        uc = course["lectures"]
-        if uc > 0:
-            priority = ap / uc
-        else:
-            priority = 0
-        courses.append((priority, cid, course))
-    courses.sort()
-    for priority, cid, course in courses:
-        schedule[cid] = []
-        lectures_scheduled = 0
-        unscheduled_lectures = []
-        while lectures_scheduled < course["lectures"]:
-            scheduled = False
-            for slot in available_periods:
-                day, period, room = slot
-                if check_hard_constraints(data, schedule, cid, day, period, room):
-                    schedule[cid].append((day, period, room, lectures_scheduled + 1))
-                    available_periods.remove(slot)
-                    lectures_scheduled += 1
-                    scheduled = True
-                    break
-            if not scheduled:
-                unscheduled_lectures.append((cid, lectures_scheduled + 1))
-                lectures_scheduled += 1
-        for cid, lecture_num in unscheduled_lectures:
-            if available_periods:
-                slot = available_periods.pop(0)
-                day, period, room = slot
-                schedule[cid].append((day, period, room, lecture_num))
-            else:
-                print("Nie przypisano: cid = " + str(cid) + ', lecture_num = ' + str(lecture_num))
-    return schedule
-
 def random_solution(data):
     schedule = {}
     available_periods = []
@@ -147,7 +105,9 @@ def random_solution(data):
             for room in data["rooms"]:
                 available_periods.append((day, period, room))
     random.shuffle(available_periods)
-    for cid, course in data["courses"].items():
+    courses = list(data["courses"].items())
+    random.shuffle(courses)
+    for cid, course in courses:
         schedule[cid] = []
         lectures_scheduled = 0
         unscheduled_lectures = []
@@ -176,6 +136,7 @@ def random_solution(data):
 
 def penalty(schedule, data):
     hard_penalty = 0
+    #h2, h3_1, h3_2, h4 = 0, 0, 0, 0
     #H2
     rooms_used = {}
     for cid in schedule:
@@ -186,7 +147,8 @@ def penalty(schedule, data):
             rooms_used[slot] += 1
     for count in rooms_used.values():
         if count > 1:
-            hard_penalty += 100 * (count - 1)
+            hard_penalty += 1000 * (count - 1)
+            #h2 += 1
     #H3
     teacher_schedule = {}
     for cid in schedule:
@@ -198,7 +160,8 @@ def penalty(schedule, data):
             teacher_schedule[slot] += 1
     for count in teacher_schedule.values():
         if count > 1:
-            hard_penalty += 100 * (count - 1)
+            hard_penalty += 1000 * (count - 1)
+            #h3_1 += 1
     curriculum_slots = {}
     for curriculum in data["curricula"]:
         curriculum_id = curriculum["id"]
@@ -211,12 +174,14 @@ def penalty(schedule, data):
                 curriculum_slots[slot] += 1
     for count in curriculum_slots.values():
         if count > 1:
-            hard_penalty += 100 * (count - 1)
+            hard_penalty += 1000 * (count - 1)
+            #h3_2 += 1
     #H4:
     for cid in schedule:
         for day, period, f, g in schedule[cid]:
             if (cid, day, period) in data["constraints"]:
-                hard_penalty += 100
+                hard_penalty += 1000
+                #h4 += 1
     soft_penalty = 0
     # S1
     for cid in schedule:
@@ -261,7 +226,9 @@ def penalty(schedule, data):
                 if periods[i+1] != periods[i] + 1:
                     soft_penalty += 2
     total_penalty = hard_penalty + soft_penalty
+    #print(f"H2: {h2}, H3_1: {h3_1}, H3_2: {h3_2}, H4: {h4}")
     return hard_penalty, soft_penalty, total_penalty
+
 
 def save_to_csv(filename, data):
     with open(filename, mode='a', newline='', encoding='utf-8') as file:
@@ -418,42 +385,185 @@ def save_to_csv(filename, data, append=True):
     with open(filename, mode=mode, newline='', encoding='utf-8') as file:
         writer = csv.writer(file, delimiter=';')
         writer.writerows(data)
-
-def simulated_annealing(data, gauss, initial_temp=1000, cooling_rate=0.99, max_iterations=1000):
+    
+def simulated_annealing(data, gauss, initial_temp=1000, cooling_rate=0.5, max_iterations=500):
     current_schedule, current_hard, current_soft, current_penalty = random_solution(data)
-    best_schedule = current_schedule.copy()
+    best_schedule = deepcopy(current_schedule)
     best_hard, best_soft, best_penalty = current_hard, current_soft, current_penalty
     temp = initial_temp
-    #write_sa = []
-    #write_sa.append(['Iteracja', 'Temperatura', 'Hard penalty', 'Soft penalty', 'Total penalty'])
-    #write_sa.append([0, temp, current_hard, current_soft, current_penalty])
+    n1_count, n2_count, n3_count, n1_contribution, n2_contribution, n3_contribution = 0, 0, 0, 0, 0, 0
+    n1_prob, n2_prob = 1/3, 2/3
+    write_sa = []
+    write_sa.append(['Iteracja', 'Temperatura', 'Hard penalty', 'Soft penalty', 'Total penalty', f"Temp: {initial_temp}, Cooling:{cooling_rate}"])
+    write_sa.append([0, temp, current_hard, current_soft, current_penalty, n1_count, n2_count, n3_count])
     for i in range(max_iterations):
-        neighbor_schedule = current_schedule.copy()
-        rand_cid = random.choice(list(neighbor_schedule.keys()))
-        lectures = neighbor_schedule[rand_cid]
-        rand_lecture = random.randint(0, len(lectures)-1)
-        day, period, room, lecture_num = lectures[rand_lecture]
-        if gauss:
-            new_day = int(random.gauss(day, 1)) % data["days"]
-            new_period = int(random.gauss(period, 1)) % data["periods_per_day"]
+        if n1_contribution != 0 and n2_contribution != 0 and n3_contribution != 0:
+            n1_prob = n1_contribution/(n1_contribution + n2_contribution + n3_contribution)
+            n2_prob = n1_contribution + n2_contribution/(n1_contribution + n2_contribution + n3_contribution)
+            n1_contribution, n2_contribution, n3_contribution = 0, 0, 0
         else:
-            new_day = random.randint(0, data["days"]-1)
-            new_period = random.randint(0, data["periods_per_day"]-1)
-        new_room = random.choice(list(data["rooms"].keys()))
-        if check_hard_constraints(data, neighbor_schedule, rand_cid, new_day, new_period, new_room):
-            neighbor_schedule[rand_cid][rand_lecture] = (new_day, new_period, new_room, lecture_num)
-            neighbor_hard, neighbor_soft, neighbor_penalty = penalty(neighbor_schedule, data)
-            diffrence = neighbor_penalty - current_penalty
-            if diffrence < 0 or (temp > 0 and random.random() < math.exp(-diffrence / temp)):
-                current_schedule = neighbor_schedule.copy()
-                current_hard, current_soft, current_penalty = neighbor_hard, neighbor_soft, neighbor_penalty
-                if current_penalty < best_penalty:
-                    best_schedule = current_schedule.copy()
-                    best_hard, best_soft, best_penalty = current_hard, current_soft, current_penalty
-        #write_sa.append([int(i+1), temp, current_hard, current_soft, current_penalty])
+            n1_prob, n2_prob = 1/3, 2/3
+        cids = list(current_schedule.keys())
+        random.shuffle(cids)
+        for cid in cids:
+            for a, b, c, lecture in current_schedule[cid]:
+                neighbor_schedule = deepcopy(current_schedule)
+                day, period, room, lecture_num = current_schedule[cid][lecture - 1]
+                rand_cid = random.choice(list(current_schedule.keys()))
+                lectures = current_schedule[rand_cid]
+                rand_lecture = random.randint(0, len(lectures)-1)
+                if gauss:
+                    new_day = int(random.gauss(day, 1))
+                    new_period = int(random.gauss(period, 1))
+                    new_day = max(0, min(new_day, data["days"] - 1))
+                    new_period = max(0, min(new_period, data["periods_per_day"] - 1))
+                else:
+                    new_day = random.randint(0, data["days"]-1)
+                    new_period = random.randint(0, data["periods_per_day"]-1)
+                new_room = random.choice(list(data["rooms"].keys()))
+                roulette = random.random()
+                if roulette <= n1_prob:
+                    neighbor_schedule_1 = dict(neighbor_schedule)
+                    neighbor_schedule_1[cid][lecture - 1] = (new_day, new_period, room, lecture_num)
+                    neighbor_hard, neighbor_soft, neighbor_penalty = penalty(neighbor_schedule_1, data)
+                elif roulette <= n2_prob and roulette > n1_prob:
+                    neighbor_schedule_2 = dict(neighbor_schedule)
+                    neighbor_schedule_2[cid][lecture - 1] = (day, period, new_room, lecture_num)
+                    neighbor_hard, neighbor_soft, neighbor_penalty = penalty(neighbor_schedule_2, data)
+                else:
+                    neighbor_schedule_3 = dict(neighbor_schedule)
+                    swap_1_day, swap_1_period, swap_1_room, swap_1_lecture = neighbor_schedule_3[cid][lecture - 1]
+                    swap_2_day, swap_2_period, swap_2_room, swap_2_lecture = neighbor_schedule_3[rand_cid][rand_lecture]
+                    neighbor_schedule_3[cid][lecture - 1] = (swap_2_day, swap_2_period, swap_2_room, swap_1_lecture)
+                    neighbor_schedule_3[rand_cid][rand_lecture] = (swap_1_day, swap_1_period, swap_1_room, swap_2_lecture)
+                    neighbor_hard, neighbor_soft, neighbor_penalty = penalty(neighbor_schedule_3, data)
+                diffrence = neighbor_penalty - current_penalty
+                if diffrence < 0 or (temp > 0 and random.random() < math.exp(-diffrence / temp)):
+                    current_hard, current_soft, current_penalty = neighbor_hard, neighbor_soft, neighbor_penalty
+                    if roulette <= n1_prob and -diffrence > 0:
+                        n1_count += 1
+                        n1_contribution += -diffrence
+                        current_schedule = deepcopy(neighbor_schedule_1)
+                    elif roulette <= n2_prob and roulette > n1_prob and -diffrence > 0:
+                        n2_count += 1
+                        n2_contribution += -diffrence
+                        current_schedule = deepcopy(neighbor_schedule_2)
+                    elif roulette > n2_prob and -diffrence > 0:
+                        n3_count += 1
+                        n3_contribution += -diffrence
+                        current_schedule = deepcopy(neighbor_schedule_3)
+                    if current_penalty < best_penalty:
+                        best_schedule = deepcopy(current_schedule)
+                        best_hard, best_soft, best_penalty = current_hard, current_soft, current_penalty
+        write_sa.append([int(i+1), temp, current_hard, current_soft, current_penalty, n1_count, n2_count, n3_count])
         temp *= cooling_rate
-    #save_to_csv(os.path.join(current_dir, "wyniki", f"{os.path.splitext(instance)[0]}", "sa_process.csv"), write_sa, append=False)
+    save_to_csv(os.path.join(current_dir, "wyniki", f"{os.path.splitext(instance)[0]}", "sa_process.csv"), write_sa, append=True)
     return best_schedule, best_hard, best_soft, best_penalty
+
+class EvolutionAlgorithm:
+    def __init__(self, pop_size=100, generations=250, mut_prob=0.01, cross_prob=0.1, Tour=5, elite_ratio=0.01):
+        self.pop_size = pop_size
+        self.generations = generations
+        self.cross_prob = cross_prob
+        self.mut_prob = mut_prob
+        self.Tour = Tour
+        self.elite_ratio = elite_ratio
+        self.pop = []
+        for i in range(pop_size):
+            self.pop.append(random_solution(data))
+
+    def evolve(self):
+        write_GA = []
+        write_GA.append([instance + ', Pop_size: ' + str(self.pop_size) + ', Gens: ' + str(self.generations) + ', Cross_prob: ' + str(self.cross_prob) 
+                         + ', Mut_prob: ' + str(self.mut_prob) + ', Tour: ' + str(self.Tour)+ ', elite_ratio: ' + str(self.elite_ratio) + ', Mutacja: change/swap' + ', Krzyzowanie: OX'])
+        write_GA.append(['Epoka EA', 'best', 'average', 'worst'])
+        for i in range(self.generations):
+            print(f"Generacja nr: {i+1}")
+            new_pop = []
+            for individual in self.selection_elitism():
+                new_pop.append(individual)
+            write_GA.append([int(i), best_solution(self.pop)[3], avg_solution(self.pop), worst_solution(self.pop)[3]])
+            while len(new_pop) != self.pop_size:
+                p1, p2 = self.selection_tournament(), self.selection_tournament()
+                if random.random() < self.cross_prob:
+                    individual = self.crossover_OX(p1, p2)
+                else: individual = p1
+                #if random.random() < self.mut_prob:
+                individual = self.mutate(individual)
+                new_pop.append(individual)
+            self.pop = new_pop
+        write_GA.append([int(self.generations), best_solution(self.pop)[3], avg_solution(self.pop), worst_solution(self.pop)[3]])
+        save_to_csv(os.path.join(current_dir, "wyniki", f"{os.path.splitext(instance)[0]}", "ga_process.csv"), write_GA, append=True)
+
+    def selection_elitism(self):
+        sorted_pop = sorted(self.pop, key=lambda p: p[3])
+        elite_pop = sorted_pop[:int(len(self.pop)*self.elite_ratio)]
+        return elite_pop
+
+    def selection_tournament(self):
+        tournament = random.sample(self.pop, self.Tour)
+        best_individual = min(tournament, key=lambda p: p[3])
+        return best_individual
+
+    def crossover_OX(self, p1, p2):
+        keys = list(p1[0].keys())
+        cut1, cut2 = sorted(random.sample(range(len(keys)), 2))
+        p1_part = {}
+        p2_part = {}
+        o1 = {}
+        for node in range(cut1, cut2):
+            cid = keys[node]
+            p1_part[cid] = p1[0][cid]
+            o1[cid] = p1[0][cid]
+        for cid in keys:
+            if cid not in p1_part:
+                p2_part[cid] = p2[0][cid]
+        for cid in keys:
+            if cid not in o1:
+                o1[cid] = p2_part[cid]
+        o1_hard, o1_soft, o1_penalty = penalty(o1, data)
+        return o1, o1_hard, o1_soft, o1_penalty
+
+    def mutate(self, solution):
+        current_schedule = solution[0]
+        current_hard, current_soft, current_penalty = solution[1], solution[2], solution[3]
+        cids = list(current_schedule.keys())
+        random.shuffle(cids)
+        for cid in cids:
+            for a, b, c, lecture in current_schedule[cid]:
+                if random.random() < self.mut_prob:
+                    #cid = random.choice(list(solution[0].keys()))
+                    #lectures = solution[0][cid]
+                    #lecture = random.randint(0, len(lectures)-1)
+                    neighbor_schedule = deepcopy(current_schedule)
+                    day, period, room, lecture_num = current_schedule[cid][lecture - 1]
+                    rand_cid = random.choice(list(neighbor_schedule.keys()))
+                    lectures = neighbor_schedule[rand_cid]
+                    rand_lecture = random.randint(0, len(lectures)-1)
+                    new_day = random.randint(0, data["days"]-1)
+                    new_period = random.randint(0, data["periods_per_day"]-1)
+                    new_room = random.choice(list(data["rooms"].keys()))
+                    roulette = random.random()
+                    if roulette <= 1/3:
+                        neighbor_schedule_1 = dict(neighbor_schedule)
+                        neighbor_schedule_1[cid][lecture - 1] = (new_day, new_period, room, lecture_num)
+                    elif roulette <= 2/3 and roulette > 1/3:
+                        neighbor_schedule_2 = dict(neighbor_schedule)
+                        neighbor_schedule_2[cid][lecture - 1] = (day, period, new_room, lecture_num)
+                    else:
+                        neighbor_schedule_3 = dict(neighbor_schedule)
+                        swap_1_day, swap_1_period, swap_1_room, swap_1_lecture = neighbor_schedule_3[cid][lecture - 1]
+                        swap_2_day, swap_2_period, swap_2_room, swap_2_lecture = neighbor_schedule_3[rand_cid][rand_lecture]
+                        neighbor_schedule_3[cid][lecture - 1] = (swap_2_day, swap_2_period, swap_2_room, swap_1_lecture)
+                        neighbor_schedule_3[rand_cid][rand_lecture] = (swap_1_day, swap_1_period, swap_1_room, swap_2_lecture)
+                    if roulette <= 1/3:
+                        current_schedule = deepcopy(neighbor_schedule_1)
+                    elif roulette <= 2/3 and roulette > 1/3:
+                        current_schedule = deepcopy(neighbor_schedule_2)
+                    else:
+                        current_schedule = deepcopy(neighbor_schedule_3)
+                    current_hard, current_soft, current_penalty = penalty(neighbor_schedule, data)
+        return current_schedule, current_hard, current_soft, current_penalty
 
 def best_solution(pop):
     best = min(pop, key=lambda p: p[3])
@@ -467,6 +577,10 @@ def avg_solution(pop):
     avg = sum(p[3] for p in pop) / len(pop)
     return avg
 
+def avg_time(pop):
+    avg = sum(p for p in pop) / len(pop)
+    return avg
+
 def std_solution(pop):
     avg = avg_solution(pop)
     std = (sum((p[3] - avg)**2 for p in pop)/ (len(pop) - 1))**0.5
@@ -475,40 +589,79 @@ def std_solution(pop):
 if __name__ == "__main__":
     start_time = time.time()
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    instances = ['toy.ctt.txt','comp01.ctt.txt','comp02.ctt.txt','comp03.ctt.txt','comp04.ctt.txt','comp05.ctt.txt','comp06.ctt.txt','comp07.ctt.txt','comp08.ctt.txt','comp09.ctt.txt','comp10.ctt.txt',
-                'comp11.ctt.txt','comp12.ctt.txt','comp13.ctt.txt','comp14.ctt.txt','comp15.ctt.txt','comp16.ctt.txt','comp17.ctt.txt','comp18.ctt.txt','comp19.ctt.txt','comp20.ctt.txt','comp21.ctt.txt']
-    #instances = ['comp01.ctt.txt']
+    #instances = ['toy.ctt.txt','comp01.ctt.txt','comp02.ctt.txt','comp03.ctt.txt','comp04.ctt.txt','comp05.ctt.txt','comp06.ctt.txt','comp07.ctt.txt','comp08.ctt.txt','comp09.ctt.txt','comp10.ctt.txt',
+    #           'comp11.ctt.txt','comp12.ctt.txt','comp13.ctt.txt','comp14.ctt.txt','comp15.ctt.txt','comp16.ctt.txt','comp17.ctt.txt','comp18.ctt.txt','comp19.ctt.txt','comp20.ctt.txt','comp21.ctt.txt']
+    instances = ['comp01.ctt.txt']
     write = []
-    write.append(['Instancja', 'Algorytm losowy', None, None, None, 'Simulated Annealing', None, None, None, 'Simulated Annealing Gauss', None, None, None,
-                   'Algorytm Genetyczny', None, None, None])
-    write.append([None, 'best', 'avg', 'worst', 'std', 'best', 'avg', 'worst', 'std', 'best', 'avg', 'worst', 'std',
-                   'best', 'avg', 'worst', 'std'])
+    write_tuning = []
+    write.append(['Instancja', 'Algorytm losowy', None, None, None, None, 'Simulated Annealing', None, None, None, None, None,
+    'Algorytm Genetyczny', None, None, None, None, None])
+    write.append([None, 'best', 'avg', 'worst', 'std', 'avg time [s]', 'best', 'avg', 'worst', 'std','hard_constraints',
+                   'avg time [s]', 'best', 'avg', 'worst', 'std','hard_constraints', 'avg time [s]'])
     for instance in instances:
         sa_pop = []
         sa_gauss_pop = []
         random_pop = []
+        ga_solutions = []
+        time_random_pop = []
+        time_sa_pop = []
+        time_ga_pop = []
         print(f"Instancja {os.path.splitext(instance)[0]}")
         data = load_ctt_file(os.path.join(current_dir, "instancje", instance))
         print("Random")
-        for i in range(10):
+        for i in range(2):
+            start_time_random = time.time()
             random_pop.append(random_solution(data))
+            end_time_random = time.time()
+            time_random_pop.append(end_time_random - start_time_random)
         best_random = best_solution(random_pop)
-        print("Sa")
+        print("SA")
         for i in range(10):
+            start_time_sa = time.time()
+            print(f"Interacja nr: {i+1}")
+            #cooling = 0
+            #for j in range(19):
+                #cooling += 0.05
             sa_pop.append(simulated_annealing(data, False))
+            end_time_sa = time.time()
+            time_sa_pop.append(end_time_sa - start_time_sa)
+        #write_tuning.append(("Initial temp", "SA_best", f"Instancja {os.path.splitext(instance)[0]}"))
+        #for sa in sa_pop:
+        #    write_tuning.append((cooling, sa[3]))
+        #save_to_csv(os.path.join(current_dir, "tuning.csv"), write_tuning)
         best_sa = best_solution(sa_pop)
-        print("Sa Gauss")
-        for i in range(10):
-            sa_gauss_pop.append(simulated_annealing(data, True))
-        best_sa_gauss = best_solution(sa_gauss_pop)
-        html = generate_html_timetable(best_random[0], data)
-        save_html_timetable(os.path.join(current_dir, "wyniki", f"{os.path.splitext(instance)[0]}"), "random_timetable.html", html)
-        html = generate_html_timetable(best_sa[0], data)
-        save_html_timetable(os.path.join(current_dir,"wyniki", f"{os.path.splitext(instance)[0]}"), "sa_timetable.html", html)
-        write.append([os.path.splitext(instance)[0], best_random[3], avg_solution(random_pop), worst_solution(random_pop)[3], std_solution(random_pop), 
-                      best_sa[3], avg_solution(sa_pop), worst_solution(sa_pop)[3], std_solution(sa_pop), 
-                      best_sa_gauss[3], avg_solution(sa_gauss_pop), worst_solution(sa_gauss_pop)[3], std_solution(sa_gauss_pop), best_sa[1]])
+        #print("GA")
+        #for i in range(10):
+            #start_time_ga = time.time()
+            #cross_prob = 0
+            #ga = EvolutionAlgorithm(cross_prob)
+            #for j in range(10):
+            #    cross_prob += 0.1
+            #ga = EvolutionAlgorithm()
+            #ga.evolve()
+            #ga_solutions.append(best_solution(ga.pop))
+            #end_time_ga = time.time()
+            #time_ga_pop.append(end_time_ga - start_time_ga)
+        #write_tuning.append(("Pop_size", "GA_best", f"Instancja {os.path.splitext(instance)[0]}"))
+        #for ea in ga_solutions:
+        #    write_tuning.append((ga.cross_prob, ea[3]))
+        #save_to_csv(os.path.join(current_dir, "tuning.csv"), write_tuning)
+        #best_ga = best_solution(ga_solutions)
+        #print("Sa Gauss")
+        #for i in range(10):
+        #    sa_gauss_pop.append(simulated_annealing(data, True))
+        #best_sa_gauss = best_solution(sa_gauss_pop)
+        #html = generate_html_timetable(best_random[0], data)
+        #save_html_timetable(os.path.join(current_dir, "wyniki", f"{os.path.splitext(instance)[0]}"), "random_timetable.html", html)
+        #html = generate_html_timetable(best_sa[0], data)
+        #save_html_timetable(os.path.join(current_dir,"wyniki", f"{os.path.splitext(instance)[0]}"), "sa_timetable.html", html)
+        #html = generate_html_timetable(best_ga[0], data)
+        #save_html_timetable(os.path.join(current_dir,"wyniki", f"{os.path.splitext(instance)[0]}"), "ga_timetable.html", html)
+        write.append([os.path.splitext(instance)[0], best_random[3], avg_solution(random_pop), worst_solution(random_pop)[3], std_solution(random_pop), avg_time(time_random_pop),
+                      best_sa[3], avg_solution(sa_pop), worst_solution(sa_pop)[3], std_solution(sa_pop), best_sa[1]/1000, avg_time(time_sa_pop)])
+                      #best_ga[3], avg_solution(ga_solutions), worst_solution(ga_solutions)[3], std_solution(ga_solutions), best_ga[1]/1000, avg_time(time_ga_pop)])
+    #std_solution(ga_solutions)
     save_to_csv(os.path.join(current_dir, "solution.csv"), write)
     end_time = time.time()
-    print(f"Czas wykonania: {end_time-start_time} sekund")
+    print(f"Czas wykonania: {(end_time-start_time)//60} minut, {(end_time-start_time)%60} sekund")
     
